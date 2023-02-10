@@ -1,4 +1,5 @@
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Union
 
@@ -87,12 +88,14 @@ async def handle_connection(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     async def write(value: RespValue) -> None:
+        print(f"Writing value: {value!r}", flush=True)
         writer.write(value.encode())
         await writer.drain()
 
     try:
         while True:
             value = await parse_resp_value(reader)
+            print(f"Received value: {value!r}", flush=True)
             match value:
                 case Array([BulkString(b"ping")]):
                     await write(SimpleString(b"PONG"))
@@ -100,12 +103,33 @@ async def handle_connection(
                     await write(BulkString(message))
                 case Array([BulkString(b"echo"), BulkString(message)]):
                     await write(BulkString(message))
+                case Array(
+                    [
+                        BulkString(b"set"),
+                        BulkString(key),
+                        BulkString(value),
+                        BulkString(b"px"),
+                        BulkString(expiry_ms_bytes),
+                    ]
+                ):
+                    print("Responding to expiry!", flush=True)
+                    now = time.time()
+                    state[key] = value, now + int(expiry_ms_bytes) / 1000
+                    await write(SimpleString(b"OK"))
                 case Array([BulkString(b"set"), BulkString(key), BulkString(value)]):
-                    state[key] = value
+                    state[key] = value, None
                     await write(SimpleString(b"OK"))
                 case Array([BulkString(b"get"), BulkString(key)]):
                     result = state.get(key)
-                    await write(Nil() if result is None else BulkString(result))
+                    if result is None:
+                        await write(Nil())
+                        continue
+                    value, expiry_ms = result
+                    if expiry_ms is not None and time.time() > expiry_ms:
+                        del state[key]
+                        await write(Nil())
+                        continue
+                    await write(BulkString(value))
                 case _:
                     raise NotImplementedError()
     except Exception:
