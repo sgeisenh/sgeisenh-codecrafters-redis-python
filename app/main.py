@@ -9,30 +9,52 @@ RespValue = Union["SimpleString", "Error", "Integer", "BulkString", "Array", "Ni
 class SimpleString:
     value: bytes
 
+    def encode(self) -> bytes:
+        return b"+" + self.value + b"\r\n"
+
 
 @dataclass
 class Error:
     message: bytes
+
+    def encode(self) -> bytes:
+        return b"-" + self.message + b"\r\n"
 
 
 @dataclass
 class Integer:
     value: int
 
+    def encode(self) -> bytes:
+        return b":" + str(self.value).encode() + b"\r\n"
+
 
 @dataclass
 class BulkString:
     value: bytes
+
+    def encode(self) -> bytes:
+        return b"$" + str(len(self.value)).encode() + b"\r\n" + self.value + b"\r\n"
 
 
 @dataclass
 class Array:
     value: list[RespValue]
 
+    def encode(self) -> bytearray:
+        result = bytearray()
+        result.extend(b"*")
+        result.extend(str(len(self.value)).encode())
+        result.extend(b"\r\n")
+        for elem in self.value:
+            result.extend(elem.encode())
+        return result
+
 
 @dataclass
 class Nil:
-    pass
+    def encode(self) -> bytes:
+        return b"$-1\r\n"
 
 
 async def parse_resp_value(reader: asyncio.StreamReader) -> RespValue:
@@ -70,7 +92,10 @@ async def handle_connection(
                     writer.write(b"+PONG\r\n")
                     await writer.drain()
                 case Array([BulkString(b"ping"), BulkString(message)]):
-                    writer.write(b"+" + message + b"\r\n")
+                    writer.write(BulkString(message).encode())
+                    await writer.drain()
+                case Array([BulkString(b"echo"), BulkString(message)]):
+                    writer.write(BulkString(message).encode())
                     await writer.drain()
                 case _:
                     raise NotImplementedError()
