@@ -6,6 +6,8 @@ import asyncio
 async def handle_connection(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
+    writer.write(b"+PONG\r\n")
+    await writer.drain()
     return
 
 
