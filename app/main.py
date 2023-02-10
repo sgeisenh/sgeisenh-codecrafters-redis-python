@@ -5,7 +5,7 @@ from typing import Union
 RespValue = Union["SimpleString", "Error", "Integer", "BulkString", "Array", "Nil"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class SimpleString:
     value: bytes
 
@@ -13,7 +13,7 @@ class SimpleString:
         return b"+" + self.value + b"\r\n"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Error:
     message: bytes
 
@@ -21,7 +21,7 @@ class Error:
         return b"-" + self.message + b"\r\n"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Integer:
     value: int
 
@@ -29,7 +29,7 @@ class Integer:
         return b":" + str(self.value).encode() + b"\r\n"
 
 
-@dataclass
+@dataclass(frozen=True)
 class BulkString:
     value: bytes
 
@@ -37,7 +37,7 @@ class BulkString:
         return b"$" + str(len(self.value)).encode() + b"\r\n" + self.value + b"\r\n"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Array:
     value: list[RespValue]
 
@@ -51,7 +51,7 @@ class Array:
         return result
 
 
-@dataclass
+@dataclass(frozen=True)
 class Nil:
     def encode(self) -> bytes:
         return b"$-1\r\n"
@@ -80,23 +80,32 @@ async def parse_resp_value(reader: asyncio.StreamReader) -> RespValue:
             raise ValueError(f"Invalid first byte: {byte!r}")
 
 
+state = {}
+
+
 async def handle_connection(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
+    async def write(value: RespValue) -> None:
+        writer.write(value.encode())
+        await writer.drain()
+
     try:
         while True:
             value = await parse_resp_value(reader)
-            print(f"Received value: {value!r}")
             match value:
                 case Array([BulkString(b"ping")]):
-                    writer.write(b"+PONG\r\n")
-                    await writer.drain()
+                    await write(SimpleString(b"PONG"))
                 case Array([BulkString(b"ping"), BulkString(message)]):
-                    writer.write(BulkString(message).encode())
-                    await writer.drain()
+                    await write(BulkString(message))
                 case Array([BulkString(b"echo"), BulkString(message)]):
-                    writer.write(BulkString(message).encode())
-                    await writer.drain()
+                    await write(BulkString(message))
+                case Array([BulkString(b"set"), BulkString(key), BulkString(value)]):
+                    state[key] = value
+                    await write(SimpleString(b"OK"))
+                case Array([BulkString(b"get"), BulkString(key)]):
+                    result = state.get(key)
+                    await write(Nil() if result is None else BulkString(result))
                 case _:
                     raise NotImplementedError()
     except Exception:
